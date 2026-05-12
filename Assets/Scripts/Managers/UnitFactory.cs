@@ -67,7 +67,7 @@ public class UnitFactory : MonoBehaviour
     {
         GameObject enemy = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         enemy.transform.localScale = Vector3.one * 0.8f;
-        enemy.GetComponent<Renderer>().material.color = new Color(1f, 0.5f, 0f);
+        enemy.GetComponent<Renderer>().sharedMaterial.color = new Color(1f, 0.5f, 0f);
 
         if (enemy.GetComponent<EnemyController>() == null)
         {
