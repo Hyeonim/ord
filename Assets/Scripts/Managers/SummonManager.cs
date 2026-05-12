@@ -109,15 +109,21 @@ public class SummonManager : MonoBehaviour
             return false;
         }
 
-        if (data.prefab == null)
-        {
-            Debug.LogError($"[SummonManager] '{data.unitName}'의 prefab이 null입니다. UnitData에서 Prefab을 할당해 주세요.");
-            return false;
-        }
-
         GameManager.Instance.SpendGold(summonCost);
 
-        GameObject unitObj = Instantiate(data.prefab, GetEmptySlotPosition(), Quaternion.identity, inventoryParent);
+        GameObject unitObj;
+        if (data.prefab != null)
+        {
+            unitObj = Instantiate(data.prefab, GetEmptySlotPosition(), Quaternion.identity, inventoryParent);
+            unitObj.SetActive(true); // 프리팩 비활성 대비
+        }
+        else
+        {
+            // prefab이 없으면 UnitFactory로 동적 생성
+            unitObj = UnitFactory.CreateTempUnitPrefab(data.grade);
+            unitObj.transform.position = GetEmptySlotPosition();
+            unitObj.transform.SetParent(inventoryParent);
+        }
         UnitController unit = unitObj.GetComponent<UnitController>();
 
         if (unit == null)

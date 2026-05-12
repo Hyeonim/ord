@@ -119,6 +119,7 @@ public class WaveManager : MonoBehaviour
         if (data.prefab == null || enemyPath == null) return;
 
         GameObject enemyObj = Instantiate(data.prefab, enemyPath.GetWaypointPosition(0), Quaternion.identity, enemyParent);
+        enemyObj.SetActive(true); // 프리팩이 비활성일 수 있으므로 강제 활성화
         EnemyController enemy = enemyObj.GetComponent<EnemyController>();
         if (enemy == null) enemy = enemyObj.AddComponent<EnemyController>();
         enemy.Initialize(data, enemyPath);
@@ -133,6 +134,7 @@ public class WaveManager : MonoBehaviour
         if (defaultEnemyPrefab == null || enemyPath == null) return;
 
         GameObject enemyObj = Instantiate(defaultEnemyPrefab, enemyPath.GetWaypointPosition(0), Quaternion.identity, enemyParent);
+        enemyObj.SetActive(true); // 프리팩이 비활성 상태일 수 있으므로 강제 활성화
         EnemyController enemy = enemyObj.GetComponent<EnemyController>();
 
         // 동적 EnemyData 생성
