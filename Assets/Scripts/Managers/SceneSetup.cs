@@ -48,7 +48,7 @@ public class SceneSetup : MonoBehaviour
         ground.transform.localScale = new Vector3(3f, 1f, 3f);
         ground.transform.position = Vector3.zero;
         ground.layer = LayerMask.NameToLayer("Default");
-        ground.GetComponent<Renderer>().material.color = new Color(0.2f, 0.4f, 0.2f);
+        ground.GetComponent<Renderer>().sharedMaterial.color = new Color(0.2f, 0.4f, 0.2f);
 
         // 웨이포인트 경로 (사각형 루프)
         GameObject pathObj = CreateChild(map, "WaypointPath");
@@ -77,7 +77,7 @@ public class SceneSetup : MonoBehaviour
             marker.transform.parent = wp.transform;
             marker.transform.localPosition = Vector3.zero;
             marker.transform.localScale = Vector3.one * 0.5f;
-            marker.GetComponent<Renderer>().material.color = Color.yellow;
+            marker.GetComponent<Renderer>().sharedMaterial.color = Color.yellow;
             Object.DestroyImmediate(marker.GetComponent<Collider>());
         }
         path.waypoints = waypoints;
@@ -99,7 +99,7 @@ public class SceneSetup : MonoBehaviour
         invGround.transform.parent = inventory.transform;
         invGround.transform.localScale = new Vector3(20f, 0.2f, 4f);
         invGround.transform.localPosition = Vector3.zero;
-        invGround.GetComponent<Renderer>().material.color = new Color(0.3f, 0.3f, 0.5f);
+        invGround.GetComponent<Renderer>().sharedMaterial.color = new Color(0.3f, 0.3f, 0.5f);
 
         // 인벤토리 슬롯 생성
         Transform[] invSlots = new Transform[12];
@@ -124,7 +124,7 @@ public class SceneSetup : MonoBehaviour
         bossObj.transform.parent = map.transform;
         bossObj.transform.position = Vector3.zero; // 맵 중앙
         bossObj.transform.localScale = new Vector3(3f, 3f, 3f);
-        bossObj.GetComponent<Renderer>().material.color = new Color(0.8f, 0f, 0f);
+        bossObj.GetComponent<Renderer>().sharedMaterial.color = new Color(0.8f, 0f, 0f);
         StoryBoss boss = bossObj.AddComponent<StoryBoss>();
 
         // StoryModeManager에 보스 연결
