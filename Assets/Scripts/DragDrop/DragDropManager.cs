@@ -5,6 +5,7 @@ using UnityEngine;
 /// - 인벤토리 → 필드 배치
 /// - 필드 → 필드 위치 이동
 /// - 유닛 간 위치 교환(Swap)
+/// - PC(마우스) + 모바일(터치) 동시 지원
 /// </summary>
 public class DragDropManager : MonoBehaviour
 {
@@ -18,9 +19,9 @@ public class DragDropManager : MonoBehaviour
 
     [Header("상태")]
     private UnitController draggedUnit;
-    private Vector3 dragOffset;
     private bool isDragging = false;
     private Camera mainCamera;
+    private int activeTouchId = -1;
 
     private void Awake()
     {
@@ -31,26 +32,56 @@ public class DragDropManager : MonoBehaviour
 
     private void Update()
     {
+        // 모바일 터치 우선 처리
+        if (Input.touchCount > 0)
+            HandleTouch();
+        else
+            HandleMouse();
+    }
+
+    private void HandleMouse()
+    {
         if (Input.GetMouseButtonDown(0))
-        {
-            TryPickUp();
-        }
+            TryPickUp(Input.mousePosition);
         else if (Input.GetMouseButton(0) && isDragging)
-        {
-            DragUnit();
-        }
+            DragUnit(Input.mousePosition);
         else if (Input.GetMouseButtonUp(0) && isDragging)
+            DropUnit(Input.mousePosition);
+    }
+
+    private void HandleTouch()
+    {
+        foreach (Touch touch in Input.touches)
         {
-            DropUnit();
+            switch (touch.phase)
+            {
+                case TouchPhase.Began:
+                    if (!isDragging)
+                    {
+                        TryPickUp(touch.position);
+                        if (isDragging) activeTouchId = touch.fingerId;
+                    }
+                    break;
+                case TouchPhase.Moved:
+                case TouchPhase.Stationary:
+                    if (isDragging && touch.fingerId == activeTouchId)
+                        DragUnit(touch.position);
+                    break;
+                case TouchPhase.Ended:
+                case TouchPhase.Canceled:
+                    if (isDragging && touch.fingerId == activeTouchId)
+                    {
+                        DropUnit(touch.position);
+                        activeTouchId = -1;
+                    }
+                    break;
+            }
         }
     }
 
-    /// <summary>
-    /// 마우스 클릭 시 유닛을 집어올리려 시도한다.
-    /// </summary>
-    private void TryPickUp()
+    private void TryPickUp(Vector2 screenPos)
     {
-        Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
+        Ray ray = mainCamera.ScreenPointToRay(screenPos);
         RaycastHit hit;
 
         if (Physics.Raycast(ray, out hit, 100f, unitLayer))
@@ -65,7 +96,6 @@ public class DragDropManager : MonoBehaviour
                 draggedUnit.originalPosition = draggedUnit.transform.position;
                 isDragging = true;
 
-                // 드래그 시작 시 약간 위로 올림
                 Vector3 pos = draggedUnit.transform.position;
                 pos.y = dragHeight;
                 draggedUnit.transform.position = pos;
@@ -75,14 +105,11 @@ public class DragDropManager : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// 유닛을 마우스 위치에 따라 이동시킨다.
-    /// </summary>
-    private void DragUnit()
+    private void DragUnit(Vector2 screenPos)
     {
         if (draggedUnit == null) return;
 
-        Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
+        Ray ray = mainCamera.ScreenPointToRay(screenPos);
         Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
 
         if (groundPlane.Raycast(ray, out float distance))
@@ -93,17 +120,11 @@ public class DragDropManager : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// 유닛을 놓을 때의 처리.
-    /// - 필드 위에 놓으면 배치
-    /// - 다른 유닛 위에 놓으면 위치 교환(Swap)
-    /// - 인벤토리 위에 놓으면 되돌리기
-    /// </summary>
-    private void DropUnit()
+    private void DropUnit(Vector2 screenPos)
     {
         if (draggedUnit == null) return;
 
-        Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
+        Ray ray = mainCamera.ScreenPointToRay(screenPos);
         RaycastHit hit;
 
         // 1. 다른 유닛 위에 놓았는지 체크 (Swap)
@@ -151,15 +172,18 @@ public class DragDropManager : MonoBehaviour
         unitB.SetPlacement(placementA);
 
         // 인벤토리 목록 업데이트
-        if (placementA == UnitPlacement.Inventory && placementB == UnitPlacement.Field)
+        if (SummonManager.Instance != null)
         {
-            SummonManager.Instance.RemoveFromInventory(unitA);
-            SummonManager.Instance.ReturnToInventory(unitB);
-        }
-        else if (placementA == UnitPlacement.Field && placementB == UnitPlacement.Inventory)
-        {
-            SummonManager.Instance.RemoveFromInventory(unitB);
-            SummonManager.Instance.ReturnToInventory(unitA);
+            if (placementA == UnitPlacement.Inventory && placementB == UnitPlacement.Field)
+            {
+                SummonManager.Instance.RemoveFromInventory(unitA);
+                SummonManager.Instance.ReturnToInventory(unitB);
+            }
+            else if (placementA == UnitPlacement.Field && placementB == UnitPlacement.Inventory)
+            {
+                SummonManager.Instance.RemoveFromInventory(unitB);
+                SummonManager.Instance.ReturnToInventory(unitA);
+            }
         }
 
         // 스토리 보스 근처 배치 체크
@@ -179,7 +203,8 @@ public class DragDropManager : MonoBehaviour
 
         if (draggedUnit.Placement == UnitPlacement.Inventory)
         {
-            SummonManager.Instance.RemoveFromInventory(draggedUnit);
+            if (SummonManager.Instance != null)
+                SummonManager.Instance.RemoveFromInventory(draggedUnit);
             draggedUnit.SetPlacement(UnitPlacement.Field);
             Debug.Log($"[DragDrop] {draggedUnit.UnitData.unitName} 필드에 배치!");
         }

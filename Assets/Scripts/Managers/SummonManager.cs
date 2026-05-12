@@ -26,7 +26,45 @@ public class SummonManager : MonoBehaviour
     private void Awake()
     {
         if (Instance == null) Instance = this;
-        else Destroy(gameObject);
+        else { Destroy(gameObject); return; }
+
+        // 인스펙터에서 연결 안 된 경우 Resources 폴더에서 자동 탐색
+        if (unitDatabase == null)
+        {
+            unitDatabase = Resources.Load<UnitDatabase>("UnitDatabase");
+            if (unitDatabase == null)
+            {
+                // Resources에도 없으면 씬 내 모든 UnitData를 찾아 임시 DB 생성
+                AutoBuildDatabase();
+            }
+        }
+
+        // inventoryParent가 없으면 자신의 Transform 사용
+        if (inventoryParent == null)
+            inventoryParent = transform;
+    }
+
+    /// <summary>
+    /// 씬 내 UnitData ScriptableObject를 찾아 임시 UnitDatabase를 자동 구성한다.
+    /// </summary>
+    private void AutoBuildDatabase()
+    {
+        UnitData[] allFound = Resources.FindObjectsOfTypeAll<UnitData>();
+        if (allFound != null && allFound.Length > 0)
+        {
+            unitDatabase = ScriptableObject.CreateInstance<UnitDatabase>();
+            unitDatabase.allUnits = allFound;
+            unitDatabase.commonRate = 50f;
+            unitDatabase.uncommonRate = 30f;
+            unitDatabase.rareRate = 15f;
+            unitDatabase.epicRate = 4f;
+            unitDatabase.legendaryRate = 1f;
+            Debug.Log($"[SummonManager] UnitDatabase 자동 구성 완료: {allFound.Length}개 유닛 등록");
+        }
+        else
+        {
+            Debug.LogWarning("[SummonManager] UnitData를 찾을 수 없습니다. 인스펙터에서 UnitDatabase를 직접 할당해 주세요.");
+        }
     }
 
     /// <summary>
@@ -42,7 +80,7 @@ public class SummonManager : MonoBehaviour
 
         if (GameManager.Instance == null)
         {
-            Debug.LogError("[SummonManager] GameManager.Instance가 null입니다. 씬에 GameManager가 있는지 확인하세요.");
+            Debug.LogError("[SummonManager] GameManager.Instance가 null입니다.");
             return false;
         }
 
@@ -52,33 +90,28 @@ public class SummonManager : MonoBehaviour
             return false;
         }
 
-        // unitDatabase null 체크
         if (unitDatabase == null)
         {
-            Debug.LogError("[SummonManager] unitDatabase가 연결되지 않았습니다. 인스펙터에서 UnitDatabase를 할당해 주세요.");
+            Debug.LogError("[SummonManager] unitDatabase가 없습니다. 인스펙터에서 UnitDatabase를 할당해 주세요.");
+            return false;
+        }
+
+        if (unitDatabase.allUnits == null || unitDatabase.allUnits.Length == 0)
+        {
+            Debug.LogError("[SummonManager] UnitDatabase에 유닛이 없습니다. UnitData를 추가해 주세요.");
             return false;
         }
 
         UnitData data = unitDatabase.GetRandomUnit();
-
-        // GetRandomUnit() 결과 null 체크
         if (data == null)
         {
-            Debug.LogError("[SummonManager] unitDatabase.GetRandomUnit()이 null을 반환했습니다. UnitDatabase에 유닛 데이터가 있는지 확인하세요.");
+            Debug.LogError("[SummonManager] GetRandomUnit()이 null을 반환했습니다.");
             return false;
         }
 
-        // prefab null 체크
         if (data.prefab == null)
         {
             Debug.LogError($"[SummonManager] '{data.unitName}'의 prefab이 null입니다. UnitData에서 Prefab을 할당해 주세요.");
-            return false;
-        }
-
-        // inventoryParent null 체크
-        if (inventoryParent == null)
-        {
-            Debug.LogError("[SummonManager] inventoryParent가 연결되지 않았습니다. 인스펙터에서 InventoryParent를 할당해 주세요.");
             return false;
         }
 
@@ -95,7 +128,6 @@ public class SummonManager : MonoBehaviour
         }
 
         unit.Initialize(data, UnitPlacement.Inventory);
-
         inventoryUnits.Add(unit);
         CheckCombine(data);
 
@@ -109,14 +141,12 @@ public class SummonManager : MonoBehaviour
     public void CheckCombine(UnitData data)
     {
         if (data == null) return;
-
-        // 동일 유닛 ID를 가진 유닛들을 찾는다
-        var sameUnits = inventoryUnits.Where(u => u != null && u.UnitData != null && u.UnitData.unitID == data.unitID).ToList();
+        var sameUnits = inventoryUnits
+            .Where(u => u != null && u.UnitData != null && u.UnitData.unitID == data.unitID)
+            .ToList();
 
         if (sameUnits.Count >= data.combineCount)
-        {
             PerformCombine(sameUnits, data);
-        }
     }
 
     /// <summary>
@@ -125,27 +155,20 @@ public class SummonManager : MonoBehaviour
     public void TryManualCombine(UnitData data)
     {
         if (data == null) return;
+        var sameUnits = inventoryUnits
+            .Where(u => u != null && u.UnitData != null && u.UnitData.unitID == data.unitID)
+            .ToList();
 
-        var sameUnits = inventoryUnits.Where(u => u != null && u.UnitData != null && u.UnitData.unitID == data.unitID).ToList();
         if (sameUnits.Count >= data.combineCount)
-        {
             PerformCombine(sameUnits, data);
-        }
         else
-        {
             Debug.Log($"[SummonManager] 조합 재료 부족: {sameUnits.Count}/{data.combineCount}");
-        }
     }
 
     private void PerformCombine(List<UnitController> materials, UnitData sourceData)
     {
-        if (unitDatabase == null)
-        {
-            Debug.LogError("[SummonManager] unitDatabase가 null입니다.");
-            return;
-        }
+        if (unitDatabase == null) return;
 
-        // 상위 등급 유닛 데이터 찾기
         UnitGrade nextGrade = (UnitGrade)((int)sourceData.grade + 1);
         UnitData[] nextGradeUnits = unitDatabase.GetUnitsByGrade(nextGrade);
 
@@ -155,7 +178,6 @@ public class SummonManager : MonoBehaviour
             return;
         }
 
-        // 재료 유닛 제거 (combineCount 만큼만)
         for (int i = 0; i < sourceData.combineCount; i++)
         {
             UnitController unit = materials[i];
@@ -163,31 +185,21 @@ public class SummonManager : MonoBehaviour
             Destroy(unit.gameObject);
         }
 
-        // 상위 유닛 생성
         UnitData resultData = nextGradeUnits[Random.Range(0, nextGradeUnits.Length)];
-
         if (resultData.prefab == null)
         {
-            Debug.LogError($"[SummonManager] 조합 결과 유닛 '{resultData.unitName}'의 prefab이 null입니다.");
+            Debug.LogError($"[SummonManager] 조합 결과 '{resultData.unitName}'의 prefab이 null입니다.");
             return;
         }
 
         GameObject resultObj = Instantiate(resultData.prefab, GetEmptySlotPosition(), Quaternion.identity, inventoryParent);
         UnitController resultUnit = resultObj.GetComponent<UnitController>();
-
-        if (resultUnit == null)
-        {
-            Debug.LogError($"[SummonManager] 조합 결과 프리팹 '{resultData.unitName}'에 UnitController가 없습니다.");
-            Destroy(resultObj);
-            return;
-        }
+        if (resultUnit == null) { Destroy(resultObj); return; }
 
         resultUnit.Initialize(resultData, UnitPlacement.Inventory);
         inventoryUnits.Add(resultUnit);
 
         Debug.Log($"[SummonManager] 조합 성공! {sourceData.unitName} x{sourceData.combineCount} → {resultData.unitName} (★{(int)resultData.grade})");
-
-        // 연쇄 조합 체크
         CheckCombine(resultData);
     }
 
@@ -201,25 +213,13 @@ public class SummonManager : MonoBehaviour
             int index = Mathf.Min(inventoryUnits.Count, inventorySlots.Length - 1);
             return inventorySlots[index].position;
         }
-
-        // 슬롯이 없으면 inventoryParent 기준 기본 위치
         if (inventoryParent != null)
             return inventoryParent.position + Vector3.right * inventoryUnits.Count * 1.5f;
-
         return Vector3.zero;
     }
 
-    /// <summary>
-    /// 인벤토리에서 유닛을 제거한다 (필드 배치 시 호출).
-    /// </summary>
-    public void RemoveFromInventory(UnitController unit)
-    {
-        inventoryUnits.Remove(unit);
-    }
+    public void RemoveFromInventory(UnitController unit) => inventoryUnits.Remove(unit);
 
-    /// <summary>
-    /// 유닛을 인벤토리로 되돌린다.
-    /// </summary>
     public void ReturnToInventory(UnitController unit)
     {
         if (inventoryUnits.Count >= maxInventorySize) return;
@@ -229,4 +229,37 @@ public class SummonManager : MonoBehaviour
     }
 
     public List<UnitController> GetInventoryUnits() => inventoryUnits;
+
+    /// <summary>
+    /// 조합법 정보를 반환한다. (UI에서 조합법 패널 표시용)
+    /// </summary>
+    public List<CombineRecipe> GetAllRecipes()
+    {
+        var recipes = new List<CombineRecipe>();
+        if (unitDatabase == null) return recipes;
+
+        foreach (var unit in unitDatabase.allUnits)
+        {
+            if ((int)unit.grade < (int)UnitGrade.Legendary)
+            {
+                UnitGrade nextGrade = (UnitGrade)((int)unit.grade + 1);
+                UnitData[] results = unitDatabase.GetUnitsByGrade(nextGrade);
+                recipes.Add(new CombineRecipe
+                {
+                    material = unit,
+                    count = unit.combineCount,
+                    possibleResults = results
+                });
+            }
+        }
+        return recipes;
+    }
+}
+
+[System.Serializable]
+public class CombineRecipe
+{
+    public UnitData material;
+    public int count;
+    public UnitData[] possibleResults;
 }
