@@ -1,159 +1,188 @@
 using UnityEngine;
 
 /// <summary>
-/// 적 유닛의 이동, 체력, 사망 처리를 담당하는 컨트롤러.
-/// 웨이포인트 경로를 따라 이동하며, 경로를 완주하면 플레이어 라이프를 감소시킨다.
+/// 적(몬스터) 컨트롤러.
+/// 경로를 따라 이동하며, 피격/스턴/이감/방깎 처리를 담당한다.
 /// </summary>
 public class EnemyController : MonoBehaviour
 {
     [Header("데이터")]
     [SerializeField] private EnemyData enemyData;
-    public EnemyData EnemyData => enemyData;
+    [SerializeField] private WaypointPath path;
 
     [Header("상태")]
-    private float currentHP;
-    private int currentWaypointIndex = 0;
-    private int lapsCompleted = 0;
-    private float totalDistanceTraveled = 0f;
+    [SerializeField] private float currentHP;
+    [SerializeField] private float maxHP;
+    [SerializeField] private float currentArmor;
+    [SerializeField] private float moveSpeed;
+    [SerializeField] private int currentWaypointIndex = 0;
+    [SerializeField] private bool isDead = false;
 
-    // 경로 참조
-    private WaypointPath path;
+    // 디버프 상태
+    private float stunTimer = 0f;
+    private float slowAmount = 0f;
+    private float slowTimer = 0f;
+    private float armorBreakAmount = 0f;
+    private float armorBreakTimer = 0f;
 
-    // 경로 진행도 (타겟팅 우선순위에 사용)
-    public float PathProgress => totalDistanceTraveled;
-    public bool IsAlive => currentHP > 0f;
+    public float CurrentHP => currentHP;
+    public float MaxHP => maxHP;
+    public float CurrentArmor => Mathf.Max(0, currentArmor - armorBreakAmount);
+    public bool IsDead => isDead;
+    public float HPPercent => maxHP > 0 ? currentHP / maxHP : 0f;
 
-    [Header("순환 설정")]
-    public int maxLaps = 3; // 최대 순환 횟수 (이후 라이프 감소)
+    // HP바 UI용
+    public System.Action<float> OnHPChanged;
 
-    public void Initialize(EnemyData data, WaypointPath waypointPath, int startIndex = 0)
+    public void Initialize(EnemyData data, WaypointPath waypointPath)
     {
         enemyData = data;
         path = waypointPath;
         currentHP = data.maxHP;
-        currentWaypointIndex = startIndex;
-        totalDistanceTraveled = 0f;
-        lapsCompleted = 0;
+        maxHP = data.maxHP;
+        currentArmor = data.armor;
+        moveSpeed = data.moveSpeed;
+        currentWaypointIndex = 0;
+        isDead = false;
 
-        gameObject.name = $"Enemy_{data.enemyName}";
-        transform.position = path.GetWaypointPosition(startIndex);
-
-        // 적 색상 설정 (테스트용)
-        Renderer rend = GetComponentInChildren<Renderer>();
-        if (rend != null)
+        if (data.isBoss)
         {
-            rend.material.color = data.isBoss ? Color.red : new Color(1f, 0.5f, 0f); // 보스=빨강, 일반=주황
+            transform.localScale = Vector3.one * data.bossScale;
         }
+
+        // HP바 생성
+        EnemyHPBar hpBar = gameObject.AddComponent<EnemyHPBar>();
+        hpBar.Initialize(this);
     }
 
     private void Update()
     {
-        if (!IsAlive) return;
+        if (isDead) return;
+
+        // 스턴 처리
+        if (stunTimer > 0f)
+        {
+            stunTimer -= Time.deltaTime;
+            return;
+        }
+
+        // 이감 처리
+        if (slowTimer > 0f)
+        {
+            slowTimer -= Time.deltaTime;
+            if (slowTimer <= 0f) slowAmount = 0f;
+        }
+
+        // 방깎 타이머
+        if (armorBreakTimer > 0f)
+        {
+            armorBreakTimer -= Time.deltaTime;
+            if (armorBreakTimer <= 0f) armorBreakAmount = 0f;
+        }
+
         MoveAlongPath();
     }
 
-    /// <summary>
-    /// 웨이포인트 경로를 따라 이동한다.
-    /// </summary>
     private void MoveAlongPath()
     {
-        if (path == null || path.waypoints.Length == 0) return;
-
-        Vector3 targetPos = path.GetWaypointPosition(currentWaypointIndex);
-        Vector3 direction = (targetPos - transform.position).normalized;
-        float step = enemyData.moveSpeed * Time.deltaTime;
-
-        transform.position = Vector3.MoveTowards(transform.position, targetPos, step);
-        totalDistanceTraveled += step;
-
-        // 타겟 방향으로 회전
-        if (direction != Vector3.zero)
+        if (path == null) return;
+        if (currentWaypointIndex >= path.WaypointCount)
         {
-            transform.rotation = Quaternion.LookRotation(direction);
+            ReachEnd();
+            return;
         }
 
-        // 웨이포인트 도달 체크
-        if (Vector3.Distance(transform.position, targetPos) < 0.1f)
+        Vector3 target = path.GetWaypointPosition(currentWaypointIndex);
+        float effectiveSpeed = moveSpeed * (1f - slowAmount);
+        transform.position = Vector3.MoveTowards(transform.position, target, effectiveSpeed * Time.deltaTime);
+
+        // 방향 바라보기
+        Vector3 dir = (target - transform.position).normalized;
+        if (dir != Vector3.zero)
         {
-            int nextIndex = path.GetNextIndex(currentWaypointIndex);
+            dir.y = 0;
+            if (dir.sqrMagnitude > 0.001f)
+                transform.rotation = Quaternion.LookRotation(dir);
+        }
 
-            // 순환 완료 체크
-            if (nextIndex == 0 && currentWaypointIndex == path.waypoints.Length - 1)
-            {
-                lapsCompleted++;
-                if (lapsCompleted >= maxLaps)
-                {
-                    // 최대 순환 완료 → 플레이어 라이프 감소
-                    OnReachEnd();
-                    return;
-                }
-            }
-
-            currentWaypointIndex = nextIndex;
+        if (Vector3.Distance(transform.position, target) < 0.1f)
+        {
+            currentWaypointIndex++;
         }
     }
 
-    /// <summary>
-    /// 경로 완주 시 호출. 플레이어 라이프를 감소시키고 자신을 제거한다.
-    /// </summary>
-    private void OnReachEnd()
+    public void TakeDamage(float damage, AttackType type)
     {
-        GameManager.Instance.LoseLife(1);
-        Debug.Log($"[Enemy] {enemyData.enemyName}이(가) 경로를 완주! 라이프 -1");
-        Die(false);
-    }
-
-    /// <summary>
-    /// 데미지를 받는다.
-    /// </summary>
-    public void TakeDamage(float damage)
-    {
-        if (!IsAlive) return;
+        if (isDead) return;
 
         currentHP -= damage;
-        
-        // 피격 이펙트 (깜빡임)
-        StartCoroutine(FlashEffect());
+        OnHPChanged?.Invoke(HPPercent);
+
+        // 피격 이펙트 (색상 깜빡임)
+        StartCoroutine(FlashDamage());
 
         if (currentHP <= 0f)
         {
-            Die(true);
+            Die();
         }
     }
 
-    /// <summary>
-    /// 사망 처리.
-    /// </summary>
-    private void Die(bool giveReward)
+    private System.Collections.IEnumerator FlashDamage()
     {
-        if (giveReward)
+        Renderer rend = GetComponent<Renderer>();
+        if (rend == null) yield break;
+
+        Color original = rend.material.color;
+        rend.material.color = Color.white;
+        yield return new WaitForSeconds(0.05f);
+        if (rend != null) rend.material.color = original;
+    }
+
+    public void ApplyStun(float duration)
+    {
+        stunTimer = Mathf.Max(stunTimer, duration);
+    }
+
+    public void ApplySlow(float amount, float duration)
+    {
+        slowAmount = Mathf.Max(slowAmount, Mathf.Clamp01(amount / 100f));
+        slowTimer = Mathf.Max(slowTimer, duration);
+    }
+
+    public void ApplyArmorBreak(float amount, float duration)
+    {
+        armorBreakAmount = Mathf.Max(armorBreakAmount, amount);
+        armorBreakTimer = Mathf.Max(armorBreakTimer, duration);
+    }
+
+    private void Die()
+    {
+        isDead = true;
+
+        // 골드 보상
+        if (GameManager.Instance != null && enemyData != null)
         {
             GameManager.Instance.AddGold(enemyData.goldReward);
+        }
+
+        // WaveManager에 알림
+        if (WaveManager.Instance != null)
+        {
             WaveManager.Instance.OnEnemyKilled();
         }
 
-        // 사망 이펙트 (스케일 축소)
+        // 사망 이펙트 후 제거
         Destroy(gameObject, 0.1f);
     }
 
-    private System.Collections.IEnumerator FlashEffect()
+    private void ReachEnd()
     {
-        Renderer rend = GetComponentInChildren<Renderer>();
-        if (rend != null)
+        // 끝까지 도달 → 유닛 카운트 증가
+        if (WaveManager.Instance != null)
         {
-            Color original = rend.material.color;
-            rend.material.color = Color.white;
-            yield return new WaitForSeconds(0.05f);
-            rend.material.color = original;
+            WaveManager.Instance.OnEnemyReachedEnd();
         }
-    }
 
-    /// <summary>
-    /// 체력 비율을 반환한다 (HP 바 등에 사용).
-    /// </summary>
-    public float GetHPRatio()
-    {
-        if (enemyData == null) return 0f;
-        return currentHP / enemyData.maxHP;
+        Destroy(gameObject);
     }
 }

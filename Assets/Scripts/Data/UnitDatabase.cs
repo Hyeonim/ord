@@ -3,55 +3,73 @@ using System.Collections.Generic;
 using System.Linq;
 
 /// <summary>
-/// 게임 내 모든 유닛 데이터를 관리하는 데이터베이스.
-/// 소환 시 등급별 확률 테이블로 사용된다.
+/// 전체 유닛 데이터베이스.
+/// 소환 확률, 유닛 검색, 등급별 필터링을 담당한다.
 /// </summary>
-[CreateAssetMenu(fileName = "UnitDatabase", menuName = "RandomDefense/UnitDatabase")]
+[CreateAssetMenu(fileName = "UnitDatabase", menuName = "ORD/Unit Database")]
 public class UnitDatabase : ScriptableObject
 {
+    [Header("유닛 목록")]
     public UnitData[] allUnits;
 
-    [Header("등급별 소환 확률 (%)")]
-    public float commonRate = 50f;
-    public float uncommonRate = 30f;
-    public float rareRate = 15f;
-    public float epicRate = 4f;
-    public float legendaryRate = 1f;
+    [Header("조합법 목록")]
+    public CombineRecipe[] allRecipes;
+
+    [Header("흔함 유닛 소환 풀 (위스프 소환용)")]
+    public UnitData[] commonPool;
 
     /// <summary>
-    /// 확률 기반으로 랜덤 유닛 데이터를 반환한다.
+    /// 위스프 소환: 흔함 등급 유닛 중 랜덤 반환
     /// </summary>
-    public UnitData GetRandomUnit()
+    public UnitData GetRandomCommonUnit()
     {
-        float roll = Random.Range(0f, 100f);
-        UnitGrade selectedGrade;
-
-        if (roll < legendaryRate)
-            selectedGrade = UnitGrade.Legendary;
-        else if (roll < legendaryRate + epicRate)
-            selectedGrade = UnitGrade.Epic;
-        else if (roll < legendaryRate + epicRate + rareRate)
-            selectedGrade = UnitGrade.Rare;
-        else if (roll < legendaryRate + epicRate + rareRate + uncommonRate)
-            selectedGrade = UnitGrade.Uncommon;
-        else
-            selectedGrade = UnitGrade.Common;
-
-        UnitData[] candidates = allUnits.Where(u => u.grade == selectedGrade).ToArray();
-        if (candidates.Length == 0)
-        {
-            // 해당 등급 유닛이 없으면 Common에서 뽑기
-            candidates = allUnits.Where(u => u.grade == UnitGrade.Common).ToArray();
-        }
-
-        return candidates[Random.Range(0, candidates.Length)];
+        if (commonPool == null || commonPool.Length == 0) return null;
+        return commonPool[Random.Range(0, commonPool.Length)];
     }
 
     /// <summary>
-    /// 특정 등급의 유닛 목록을 반환한다.
+    /// 등급별 유닛 목록 반환
     /// </summary>
     public UnitData[] GetUnitsByGrade(UnitGrade grade)
     {
-        return allUnits.Where(u => u.grade == grade).ToArray();
+        if (allUnits == null) return new UnitData[0];
+        return allUnits.Where(u => u != null && u.grade == grade).ToArray();
+    }
+
+    /// <summary>
+    /// 이름으로 유닛 검색
+    /// </summary>
+    public UnitData FindUnitByName(string unitName)
+    {
+        if (allUnits == null) return null;
+        return allUnits.FirstOrDefault(u => u != null && u.unitName == unitName);
+    }
+
+    /// <summary>
+    /// ID로 유닛 검색
+    /// </summary>
+    public UnitData FindUnitByID(int id)
+    {
+        if (allUnits == null) return null;
+        return allUnits.FirstOrDefault(u => u != null && u.unitID == id);
+    }
+
+    /// <summary>
+    /// 특정 유닛의 조합법 검색
+    /// </summary>
+    public CombineRecipe FindRecipeForUnit(UnitData unit)
+    {
+        if (allRecipes == null) return null;
+        return allRecipes.FirstOrDefault(r => r != null && r.resultUnit == unit);
+    }
+
+    /// <summary>
+    /// 특정 유닛이 재료로 사용되는 모든 조합법 반환
+    /// </summary>
+    public CombineRecipe[] FindRecipesUsingUnit(UnitData unit)
+    {
+        if (allRecipes == null) return new CombineRecipe[0];
+        return allRecipes.Where(r => r != null && r.materials != null &&
+            r.materials.Any(m => m.unitData == unit)).ToArray();
     }
 }

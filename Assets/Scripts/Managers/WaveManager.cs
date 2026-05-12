@@ -3,8 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 
 /// <summary>
-/// 웨이브 시스템을 관리하는 매니저.
-/// 일정 시간마다 적 웨이브를 생성하고, 웨이브 진행 상태를 추적한다.
+/// 웨이브(라운드) 시스템 관리.
+/// 75라운드 동안 적을 생성하고, 보스 라운드를 처리한다.
 /// </summary>
 public class WaveManager : MonoBehaviour
 {
@@ -13,29 +13,37 @@ public class WaveManager : MonoBehaviour
     [Header("참조")]
     public WaypointPath enemyPath;
     public Transform enemyParent;
+    public GameObject defaultEnemyPrefab;
 
     [Header("웨이브 데이터")]
     public WaveData[] waves;
-    
+
     [Header("설정")]
-    public float timeBetweenWaves = 15f;  // 웨이브 간 대기 시간
-    public float firstWaveDelay = 5f;     // 첫 웨이브 시작 전 대기
+    public float timeBetweenWaves = 15f;
+    public float firstWaveDelay = 5f;
+    public float spawnInterval = 0.8f;
 
-    [Header("동적 생성 (WaveData 없을 때)")]
-    public GameObject defaultEnemyPrefab;
-    public int baseEnemyCount = 5;
-    public float enemyHPScaling = 1.2f;   // 웨이브당 HP 증가 배율
-    public float enemySpeedScaling = 1.05f;
+    [Header("스케일링")]
+    public float baseHP = 100f;
+    public float hpScalePerRound = 1.15f;
+    public float baseSpeed = 2f;
+    public float speedScalePerRound = 1.02f;
+    public float baseArmor = 0f;
+    public float armorScalePerRound = 0.5f;
 
-    [Header("상태 (읽기 전용)")]
+    [Header("보스 라운드")]
+    public int[] bossRounds = { 10, 20, 30, 40, 50, 60, 70, 75 };
+
+    [Header("상태")]
     [SerializeField] private int currentWaveIndex = 0;
     [SerializeField] private int enemiesAlive = 0;
-    [SerializeField] private int totalEnemiesKilled = 0;
     [SerializeField] private bool isSpawning = false;
 
     public int CurrentWave => currentWaveIndex + 1;
     public int EnemiesAlive => enemiesAlive;
     public bool IsWaveActive => isSpawning || enemiesAlive > 0;
+
+    private Coroutine waveCoroutine;
 
     private void Awake()
     {
@@ -45,12 +53,9 @@ public class WaveManager : MonoBehaviour
 
     private void Start()
     {
-        StartCoroutine(WaveLoop());
+        waveCoroutine = StartCoroutine(WaveLoop());
     }
 
-    /// <summary>
-    /// 웨이브 루프: 웨이브를 순차적으로 생성한다.
-    /// </summary>
     private IEnumerator WaveLoop()
     {
         yield return new WaitForSeconds(firstWaveDelay);
@@ -60,33 +65,41 @@ public class WaveManager : MonoBehaviour
             if (GameManager.Instance != null && GameManager.Instance.IsGameOver)
                 yield break;
 
-            Debug.Log($"[WaveManager] === 웨이브 {CurrentWave} 시작! ===");
+            // 새 라운드 시작
+            if (GameManager.Instance != null)
+                GameManager.Instance.StartNewRound();
+
             yield return StartCoroutine(SpawnWave());
 
-            // 현재 웨이브의 모든 적이 죽을 때까지 대기
+            // 모든 적 처치 대기
             yield return new WaitUntil(() => enemiesAlive <= 0);
 
-            Debug.Log($"[WaveManager] 웨이브 {CurrentWave} 클리어!");
+            // 라운드 완료
+            if (GameManager.Instance != null)
+                GameManager.Instance.OnRoundComplete();
+
             currentWaveIndex++;
 
-            // 다음 웨이브 대기
+            if (currentWaveIndex >= GameManager.Instance.MaxRounds)
+                yield break;
+
             yield return new WaitForSeconds(timeBetweenWaves);
         }
     }
 
-    /// <summary>
-    /// 단일 웨이브를 생성한다.
-    /// </summary>
     private IEnumerator SpawnWave()
     {
         isSpawning = true;
+        int round = currentWaveIndex + 1;
+        bool isBossRound = IsBossRound(round);
 
-        if (waves != null && currentWaveIndex < waves.Length)
+        if (waves != null && currentWaveIndex < waves.Length && waves[currentWaveIndex] != null)
         {
             // WaveData 기반 생성
             WaveData waveData = waves[currentWaveIndex];
             foreach (var entry in waveData.entries)
             {
+                if (entry.enemyData == null) continue;
                 for (int i = 0; i < entry.count; i++)
                 {
                     SpawnEnemy(entry.enemyData);
@@ -96,78 +109,137 @@ public class WaveManager : MonoBehaviour
         }
         else
         {
-            // 동적 생성 (무한 웨이브)
-            int enemyCount = baseEnemyCount + currentWaveIndex * 2;
-            float hpMult = Mathf.Pow(enemyHPScaling, currentWaveIndex);
-            float speedMult = Mathf.Pow(enemySpeedScaling, currentWaveIndex);
+            // 동적 생성
+            int enemyCount = GetEnemyCount(round);
+            float hp = baseHP * Mathf.Pow(hpScalePerRound, currentWaveIndex);
+            float speed = baseSpeed * Mathf.Pow(speedScalePerRound, currentWaveIndex);
+            float armor = baseArmor + armorScalePerRound * currentWaveIndex;
+
+            if (isBossRound)
+            {
+                // 보스 생성
+                SpawnDynamicEnemy(hp * 10f, speed * 0.5f, armor * 2f, true);
+                yield return new WaitForSeconds(1f);
+            }
 
             for (int i = 0; i < enemyCount; i++)
             {
-                SpawnDynamicEnemy(hpMult, speedMult);
-                yield return new WaitForSeconds(1f);
+                SpawnDynamicEnemy(hp, speed, armor, false);
+                yield return new WaitForSeconds(spawnInterval);
             }
         }
 
         isSpawning = false;
     }
 
-    /// <summary>
-    /// EnemyData 기반으로 적을 생성한다.
-    /// </summary>
     private void SpawnEnemy(EnemyData data)
     {
         if (data.prefab == null || enemyPath == null) return;
 
-        GameObject enemyObj = Instantiate(data.prefab, enemyPath.GetWaypointPosition(0), Quaternion.identity, enemyParent);
-        enemyObj.SetActive(true); // 프리팩이 비활성일 수 있으므로 강제 활성화
+        Vector3 spawnPos = enemyPath.GetWaypointPosition(0);
+        GameObject enemyObj = Instantiate(data.prefab, spawnPos, Quaternion.identity, enemyParent);
+        enemyObj.SetActive(true);
+
         EnemyController enemy = enemyObj.GetComponent<EnemyController>();
         if (enemy == null) enemy = enemyObj.AddComponent<EnemyController>();
         enemy.Initialize(data, enemyPath);
         enemiesAlive++;
     }
 
-    /// <summary>
-    /// 동적으로 적을 생성한다 (WaveData 없을 때).
-    /// </summary>
-    private void SpawnDynamicEnemy(float hpMultiplier, float speedMultiplier)
+    private void SpawnDynamicEnemy(float hp, float speed, float armor, bool isBoss)
     {
-        if (defaultEnemyPrefab == null || enemyPath == null) return;
+        if (enemyPath == null) return;
 
-        GameObject enemyObj = Instantiate(defaultEnemyPrefab, enemyPath.GetWaypointPosition(0), Quaternion.identity, enemyParent);
-        enemyObj.SetActive(true); // 프리팩이 비활성 상태일 수 있으므로 강제 활성화
+        Vector3 spawnPos = enemyPath.GetWaypointPosition(0);
+        GameObject enemyObj;
+
+        if (defaultEnemyPrefab != null)
+        {
+            enemyObj = Instantiate(defaultEnemyPrefab, spawnPos, Quaternion.identity, enemyParent);
+        }
+        else
+        {
+            // 프리팹 없으면 동적 생성
+            enemyObj = GameObject.CreatePrimitive(isBoss ? PrimitiveType.Capsule : PrimitiveType.Sphere);
+            enemyObj.transform.position = spawnPos;
+            if (enemyParent != null) enemyObj.transform.SetParent(enemyParent);
+        }
+
+        enemyObj.SetActive(true);
+        if (isBoss) enemyObj.transform.localScale = Vector3.one * 1.5f;
+        else enemyObj.transform.localScale = Vector3.one * 0.6f;
+
         EnemyController enemy = enemyObj.GetComponent<EnemyController>();
+        if (enemy == null) enemy = enemyObj.AddComponent<EnemyController>();
 
-        // 동적 EnemyData 생성
         EnemyData dynamicData = ScriptableObject.CreateInstance<EnemyData>();
-        dynamicData.enemyName = $"Wave{CurrentWave}_Enemy";
-        dynamicData.maxHP = 100f * hpMultiplier;
-        dynamicData.moveSpeed = 2f * speedMultiplier;
-        dynamicData.goldReward = 10 + currentWaveIndex * 2;
+        dynamicData.enemyName = isBoss ? $"Boss_R{CurrentWave}" : $"Enemy_R{CurrentWave}";
+        dynamicData.maxHP = hp;
+        dynamicData.moveSpeed = speed;
+        dynamicData.armor = armor;
+        dynamicData.goldReward = isBoss ? 50 + currentWaveIndex * 5 : 5 + currentWaveIndex;
+        dynamicData.isBoss = isBoss;
 
         enemy.Initialize(dynamicData, enemyPath);
         enemiesAlive++;
+
+        // 보스면 색상 빨강
+        Renderer rend = enemyObj.GetComponent<Renderer>();
+        if (rend != null)
+        {
+            rend.material.color = isBoss ? Color.red : new Color(1f, 0.5f, 0f);
+        }
     }
 
-    /// <summary>
-    /// 적이 죽었을 때 호출된다.
-    /// </summary>
     public void OnEnemyKilled()
     {
         enemiesAlive = Mathf.Max(0, enemiesAlive - 1);
-        totalEnemiesKilled++;
     }
 
-    /// <summary>
-    /// 현재 웨이브를 강제로 스킵한다 (디버그용).
-    /// </summary>
+    public void OnEnemyReachedEnd()
+    {
+        enemiesAlive = Mathf.Max(0, enemiesAlive - 1);
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.LoseLife(1);
+        }
+    }
+
+    private bool IsBossRound(int round)
+    {
+        foreach (int br in bossRounds)
+        {
+            if (round == br) return true;
+        }
+        return false;
+    }
+
+    private int GetEnemyCount(int round)
+    {
+        return 5 + round / 5 * 2;
+    }
+
+    public void ResetWaves()
+    {
+        if (waveCoroutine != null) StopCoroutine(waveCoroutine);
+        currentWaveIndex = 0;
+        enemiesAlive = 0;
+        isSpawning = false;
+
+        // 모든 적 제거
+        if (enemyParent != null)
+        {
+            foreach (Transform child in enemyParent)
+                Destroy(child.gameObject);
+        }
+
+        waveCoroutine = StartCoroutine(WaveLoop());
+    }
+
     public void SkipWave()
     {
-        // 모든 적 제거
         EnemyController[] enemies = FindObjectsOfType<EnemyController>();
-        foreach (var e in enemies)
-        {
-            Destroy(e.gameObject);
-        }
+        foreach (var e in enemies) Destroy(e.gameObject);
         enemiesAlive = 0;
     }
 }

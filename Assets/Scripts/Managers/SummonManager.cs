@@ -3,269 +3,320 @@ using System.Collections.Generic;
 using System.Linq;
 
 /// <summary>
-/// 유닛 소환 및 조합 시스템을 관리하는 매니저.
-/// - 골드를 소비하여 랜덤 유닛 소환
-/// - 동일 유닛 3개를 모아 상위 유닛으로 조합
+/// 위스프 소환 시스템 및 인벤토리 관리.
+/// 위스프를 사용하여 랜덤 흔함 유닛을 소환하고, 인벤토리를 관리한다.
 /// </summary>
 public class SummonManager : MonoBehaviour
 {
     public static SummonManager Instance { get; private set; }
 
-    [Header("참조")]
-    public UnitDatabase unitDatabase;
-    public Transform inventoryParent;    // 인벤토리(대기석) 부모 오브젝트
-    public Transform[] inventorySlots;   // 대기석 슬롯 위치 배열
+    [Header("데이터베이스")]
+    [SerializeField] private UnitDatabase unitDatabase;
 
-    [Header("설정")]
-    public int summonCost = 50;
-    public int maxInventorySize = 12;
+    [Header("인벤토리 설정")]
+    [SerializeField] private int maxInventorySize = 12;
+    [SerializeField] private Transform inventoryParent;
+    [SerializeField] private Transform[] inventorySlots;
 
-    // 현재 인벤토리에 있는 유닛 리스트
+    /// <summary>
+    /// 외부에서 인벤토리 슬롯 설정 (MapGenerator 등)
+    /// </summary>
+    public void SetInventorySlots(Transform[] slots)
+    {
+        inventorySlots = slots;
+        if (inventoryParent == null && slots != null && slots.Length > 0)
+            inventoryParent = slots[0].parent;
+    }
+
+    [Header("필드 설정")]
+    [SerializeField] private Transform fieldParent;
+
+    // 인벤토리 유닛 목록
     private List<UnitController> inventoryUnits = new List<UnitController>();
+    private List<UnitController> fieldUnits = new List<UnitController>();
+
+    public List<UnitController> InventoryUnits => inventoryUnits;
+    public List<UnitController> FieldUnits => fieldUnits;
+    public int InventoryCount => inventoryUnits.Count;
+    public int MaxInventory => maxInventorySize;
+    public UnitDatabase Database => unitDatabase;
 
     private void Awake()
     {
         if (Instance == null) Instance = this;
         else { Destroy(gameObject); return; }
 
-        // 인스펙터에서 연결 안 된 경우 Resources 폴더에서 자동 탐색
+        // 자동 DB 탐색
         if (unitDatabase == null)
         {
             unitDatabase = Resources.Load<UnitDatabase>("UnitDatabase");
-            if (unitDatabase == null)
+        }
+
+        // DB가 있어도 commonPool이 비어있으면 자동 구성
+        if (unitDatabase != null && (unitDatabase.commonPool == null || unitDatabase.commonPool.Length == 0))
+        {
+            Debug.Log("[SummonManager] UnitDatabase의 commonPool이 비어있어 allUnits에서 자동 구성합니다.");
+            // allUnits에서 흔함 등급 또는 전체를 commonPool로 사용
+            if (unitDatabase.allUnits != null && unitDatabase.allUnits.Length > 0)
             {
-                // Resources에도 없으면 씬 내 모든 UnitData를 찾아 임시 DB 생성
-                AutoBuildDatabase();
+                unitDatabase.commonPool = unitDatabase.allUnits;
             }
         }
 
-        // inventoryParent가 없으면 자신의 Transform 사용
-        if (inventoryParent == null)
-            inventoryParent = transform;
+        if (unitDatabase == null)
+        {
+            Debug.LogWarning("[SummonManager] UnitDatabase를 찾을 수 없습니다. 런타임 자동 생성합니다.");
+            AutoBuildDatabase();
+        }
+
+        // 인벤토리 슬롯 자동 탐색
+        if (inventorySlots == null || inventorySlots.Length == 0)
+        {
+            AutoFindInventorySlots();
+        }
     }
 
-    /// <summary>
-    /// 씬 내 UnitData ScriptableObject를 찾아 임시 UnitDatabase를 자동 구성한다.
-    /// </summary>
-    private void AutoBuildDatabase()
+    private void AutoFindInventorySlots()
     {
-        UnitData[] allFound = Resources.FindObjectsOfTypeAll<UnitData>();
-        if (allFound != null && allFound.Length > 0)
+        MapGenerator map = FindObjectOfType<MapGenerator>();
+        if (map != null && map.generatedInventorySlots != null && map.generatedInventorySlots.Length > 0)
         {
-            unitDatabase = ScriptableObject.CreateInstance<UnitDatabase>();
-            unitDatabase.allUnits = allFound;
-            unitDatabase.commonRate = 50f;
-            unitDatabase.uncommonRate = 30f;
-            unitDatabase.rareRate = 15f;
-            unitDatabase.epicRate = 4f;
-            unitDatabase.legendaryRate = 1f;
-            Debug.Log($"[SummonManager] UnitDatabase 자동 구성 완료: {allFound.Length}개 유닛 등록");
-        }
-        else
-        {
-            Debug.LogWarning("[SummonManager] UnitData를 찾을 수 없습니다. 인스펙터에서 UnitDatabase를 직접 할당해 주세요.");
+            inventorySlots = map.generatedInventorySlots;
+            if (inventoryParent == null) inventoryParent = transform;
+            Debug.Log($"[SummonManager] MapGenerator에서 인벤토리 슬롯 {inventorySlots.Length}개 자동 연결");
         }
     }
 
     /// <summary>
-    /// 랜덤 유닛을 소환하여 인벤토리에 배치한다.
+    /// 위스프를 사용하여 랜덤 흔함 유닛 소환
     /// </summary>
-    public bool SummonRandomUnit()
+    public bool SummonWithWisp()
+    {
+        if (GameManager.Instance == null) return false;
+        if (!GameManager.Instance.UseWisp()) 
+        {
+            Debug.Log("[SummonManager] 위스프가 부족합니다!");
+            return false;
+        }
+
+        return SummonRandomCommonUnit();
+    }
+
+    /// <summary>
+    /// 랜덤 흔함 유닛 소환 (내부)
+    /// </summary>
+    private bool SummonRandomCommonUnit()
     {
         if (inventoryUnits.Count >= maxInventorySize)
         {
             Debug.Log("[SummonManager] 인벤토리가 가득 찼습니다!");
-            return false;
-        }
-
-        if (GameManager.Instance == null)
-        {
-            Debug.LogError("[SummonManager] GameManager.Instance가 null입니다.");
-            return false;
-        }
-
-        if (GameManager.Instance.Gold < summonCost)
-        {
-            Debug.Log("[SummonManager] 골드가 부족합니다!");
+            // 위스프 반환
+            if (GameManager.Instance != null) GameManager.Instance.AddWisps(1);
             return false;
         }
 
         if (unitDatabase == null)
         {
-            Debug.LogError("[SummonManager] unitDatabase가 없습니다. 인스펙터에서 UnitDatabase를 할당해 주세요.");
+            Debug.LogError("[SummonManager] UnitDatabase가 없습니다.");
             return false;
         }
 
-        if (unitDatabase.allUnits == null || unitDatabase.allUnits.Length == 0)
-        {
-            Debug.LogError("[SummonManager] UnitDatabase에 유닛이 없습니다. UnitData를 추가해 주세요.");
-            return false;
-        }
-
-        UnitData data = unitDatabase.GetRandomUnit();
+        UnitData data = unitDatabase.GetRandomCommonUnit();
         if (data == null)
         {
-            Debug.LogError("[SummonManager] GetRandomUnit()이 null을 반환했습니다.");
+            Debug.LogError("[SummonManager] 소환 가능한 흔함 유닛이 없습니다.");
             return false;
         }
 
-        GameManager.Instance.SpendGold(summonCost);
+        // 유닛 생성
+        GameObject unitObj = CreateUnitObject(data);
+        if (unitObj == null) return false;
 
-        GameObject unitObj;
-        if (data.prefab != null)
-        {
-            unitObj = Instantiate(data.prefab, GetEmptySlotPosition(), Quaternion.identity, inventoryParent);
-            unitObj.SetActive(true); // 프리팩 비활성 대비
-        }
-        else
-        {
-            // prefab이 없으면 UnitFactory로 동적 생성
-            unitObj = UnitFactory.CreateTempUnitPrefab(data.grade);
-            unitObj.transform.position = GetEmptySlotPosition();
-            unitObj.transform.SetParent(inventoryParent);
-        }
+        // 인벤토리 슬롯에 배치
+        Vector3 slotPos = GetEmptySlotPosition();
+        unitObj.transform.position = slotPos;
+
         UnitController unit = unitObj.GetComponent<UnitController>();
-
-        if (unit == null)
-        {
-            Debug.LogError($"[SummonManager] '{data.unitName}' 프리팹에 UnitController 컴포넌트가 없습니다.");
-            Destroy(unitObj);
-            return false;
-        }
-
+        if (unit == null) unit = unitObj.AddComponent<UnitController>();
         unit.Initialize(data, UnitPlacement.Inventory);
-        inventoryUnits.Add(unit);
-        CheckCombine(data);
 
-        Debug.Log($"[SummonManager] {data.unitName} (★{(int)data.grade}) 소환!");
+        inventoryUnits.Add(unit);
+
+        Debug.Log($"[SummonManager] '{data.unitName}' 소환! ({data.grade}) 인벤토리: {inventoryUnits.Count}/{maxInventorySize}");
+
+        // 자동 조합 체크
+        if (CombineManager.Instance != null)
+            CombineManager.Instance.CheckAutoCombine(unit);
+
         return true;
     }
 
     /// <summary>
-    /// 조합 가능 여부를 체크하고, 가능하면 자동 조합을 수행한다.
+    /// 유닛 오브젝트 생성
     /// </summary>
-    public void CheckCombine(UnitData data)
+    private GameObject CreateUnitObject(UnitData data)
     {
-        if (data == null) return;
-        var sameUnits = inventoryUnits
-            .Where(u => u != null && u.UnitData != null && u.UnitData.unitID == data.unitID)
-            .ToList();
+        GameObject unitObj;
 
-        if (sameUnits.Count >= data.combineCount)
-            PerformCombine(sameUnits, data);
-    }
-
-    /// <summary>
-    /// 수동 조합 트리거 (UI 버튼 등에서 호출)
-    /// </summary>
-    public void TryManualCombine(UnitData data)
-    {
-        if (data == null) return;
-        var sameUnits = inventoryUnits
-            .Where(u => u != null && u.UnitData != null && u.UnitData.unitID == data.unitID)
-            .ToList();
-
-        if (sameUnits.Count >= data.combineCount)
-            PerformCombine(sameUnits, data);
+        if (data.prefab != null)
+        {
+            unitObj = Instantiate(data.prefab, Vector3.zero, Quaternion.identity, inventoryParent);
+            unitObj.SetActive(true);
+        }
         else
-            Debug.Log($"[SummonManager] 조합 재료 부족: {sameUnits.Count}/{data.combineCount}");
-    }
-
-    private void PerformCombine(List<UnitController> materials, UnitData sourceData)
-    {
-        if (unitDatabase == null) return;
-
-        UnitGrade nextGrade = (UnitGrade)((int)sourceData.grade + 1);
-        UnitData[] nextGradeUnits = unitDatabase.GetUnitsByGrade(nextGrade);
-
-        if (nextGradeUnits == null || nextGradeUnits.Length == 0)
         {
-            Debug.Log("[SummonManager] 더 이상 상위 등급이 없습니다!");
-            return;
+            // 프리팹 없으면 동적 생성 (등급별 형태)
+            unitObj = CreateTempUnitPrefab(data.grade);
+            unitObj.transform.SetParent(inventoryParent);
         }
 
-        for (int i = 0; i < sourceData.combineCount; i++)
-        {
-            UnitController unit = materials[i];
-            inventoryUnits.Remove(unit);
-            Destroy(unit.gameObject);
-        }
-
-        UnitData resultData = nextGradeUnits[Random.Range(0, nextGradeUnits.Length)];
-        if (resultData.prefab == null)
-        {
-            Debug.LogError($"[SummonManager] 조합 결과 '{resultData.unitName}'의 prefab이 null입니다.");
-            return;
-        }
-
-        GameObject resultObj = Instantiate(resultData.prefab, GetEmptySlotPosition(), Quaternion.identity, inventoryParent);
-        UnitController resultUnit = resultObj.GetComponent<UnitController>();
-        if (resultUnit == null) { Destroy(resultObj); return; }
-
-        resultUnit.Initialize(resultData, UnitPlacement.Inventory);
-        inventoryUnits.Add(resultUnit);
-
-        Debug.Log($"[SummonManager] 조합 성공! {sourceData.unitName} x{sourceData.combineCount} → {resultData.unitName} (★{(int)resultData.grade})");
-        CheckCombine(resultData);
+        unitObj.name = $"Unit_{data.unitName}";
+        return unitObj;
     }
 
     /// <summary>
-    /// 빈 인벤토리 슬롯 위치를 반환한다.
+    /// 임시 유닛 프리팹 생성 (등급별 형태/색상)
+    /// </summary>
+    private GameObject CreateTempUnitPrefab(UnitGrade grade)
+    {
+        PrimitiveType shape;
+        float scale;
+
+        switch (grade)
+        {
+            case UnitGrade.Common:
+                shape = PrimitiveType.Cube; scale = 0.5f; break;
+            case UnitGrade.Uncommon:
+                shape = PrimitiveType.Cube; scale = 0.6f; break;
+            case UnitGrade.Special:
+                shape = PrimitiveType.Cylinder; scale = 0.5f; break;
+            case UnitGrade.Rare:
+                shape = PrimitiveType.Capsule; scale = 0.5f; break;
+            case UnitGrade.Legendary:
+            case UnitGrade.Hidden:
+                shape = PrimitiveType.Capsule; scale = 0.7f; break;
+            default:
+                shape = PrimitiveType.Capsule; scale = 0.8f; break;
+        }
+
+        GameObject obj = GameObject.CreatePrimitive(shape);
+        obj.transform.localScale = Vector3.one * scale;
+
+        // UnitController 추가
+        if (obj.GetComponent<UnitController>() == null)
+            obj.AddComponent<UnitController>();
+
+        return obj;
+    }
+
+    /// <summary>
+    /// 빈 인벤토리 슬롯 위치 반환
     /// </summary>
     private Vector3 GetEmptySlotPosition()
     {
         if (inventorySlots != null && inventorySlots.Length > 0)
         {
-            int index = Mathf.Min(inventoryUnits.Count, inventorySlots.Length - 1);
-            return inventorySlots[index].position;
-        }
-        if (inventoryParent != null)
-            return inventoryParent.position + Vector3.right * inventoryUnits.Count * 1.5f;
-        return Vector3.zero;
-    }
-
-    public void RemoveFromInventory(UnitController unit) => inventoryUnits.Remove(unit);
-
-    public void ReturnToInventory(UnitController unit)
-    {
-        if (inventoryUnits.Count >= maxInventorySize) return;
-        unit.transform.position = GetEmptySlotPosition();
-        unit.SetPlacement(UnitPlacement.Inventory);
-        inventoryUnits.Add(unit);
-    }
-
-    public List<UnitController> GetInventoryUnits() => inventoryUnits;
-
-    /// <summary>
-    /// 조합법 정보를 반환한다. (UI에서 조합법 패널 표시용)
-    /// </summary>
-    public List<CombineRecipe> GetAllRecipes()
-    {
-        var recipes = new List<CombineRecipe>();
-        if (unitDatabase == null) return recipes;
-
-        foreach (var unit in unitDatabase.allUnits)
-        {
-            if ((int)unit.grade < (int)UnitGrade.Legendary)
+            for (int i = 0; i < inventorySlots.Length; i++)
             {
-                UnitGrade nextGrade = (UnitGrade)((int)unit.grade + 1);
-                UnitData[] results = unitDatabase.GetUnitsByGrade(nextGrade);
-                recipes.Add(new CombineRecipe
-                {
-                    material = unit,
-                    count = unit.combineCount,
-                    possibleResults = results
-                });
+                bool occupied = inventoryUnits.Any(u => u != null &&
+                    Vector3.Distance(u.transform.position, inventorySlots[i].position) < 0.5f);
+                if (!occupied) return inventorySlots[i].position;
             }
         }
-        return recipes;
-    }
-}
 
-[System.Serializable]
-public class CombineRecipe
-{
-    public UnitData material;
-    public int count;
-    public UnitData[] possibleResults;
+        // 슬롯이 없으면 그리드 배치
+        int index = inventoryUnits.Count;
+        int col = index % 4;
+        int row = index / 4;
+        return new Vector3(col * 1.2f - 1.8f, 0.5f, row * 1.2f - 8f);
+    }
+
+    /// <summary>
+    /// 유닛을 인벤토리에서 제거
+    /// </summary>
+    public void RemoveFromInventory(UnitController unit)
+    {
+        inventoryUnits.Remove(unit);
+    }
+
+    /// <summary>
+    /// 유닛을 필드에 추가
+    /// </summary>
+    public void AddToField(UnitController unit)
+    {
+        if (!fieldUnits.Contains(unit))
+            fieldUnits.Add(unit);
+    }
+
+    /// <summary>
+    /// 유닛을 필드에서 제거
+    /// </summary>
+    public void RemoveFromField(UnitController unit)
+    {
+        fieldUnits.Remove(unit);
+    }
+
+    /// <summary>
+    /// 인벤토리 초기화
+    /// </summary>
+    public void ResetInventory()
+    {
+        foreach (var unit in inventoryUnits)
+        {
+            if (unit != null) Destroy(unit.gameObject);
+        }
+        foreach (var unit in fieldUnits)
+        {
+            if (unit != null) Destroy(unit.gameObject);
+        }
+        inventoryUnits.Clear();
+        fieldUnits.Clear();
+    }
+
+    /// <summary>
+    /// 같은 유닛 목록 반환 (조합용)
+    /// </summary>
+    public List<UnitController> GetSameUnits(UnitData data)
+    {
+        return inventoryUnits.Where(u => u != null && u.UnitData != null &&
+            u.UnitData.unitName == data.unitName && u.UnitData.grade == data.grade).ToList();
+    }
+
+    /// <summary>
+    /// DB 자동 구성 (Resources에 없을 때)
+    /// </summary>
+    private void AutoBuildDatabase()
+    {
+        unitDatabase = ScriptableObject.CreateInstance<UnitDatabase>();
+
+        // 원피스 흔함 유닛 14종
+        string[] commonNames = {
+            "루피", "조로", "나미", "우솝", "상디",
+            "쵸파", "로빈", "프랑키", "브룩", "에이스",
+            "마르코", "킨에몬", "로우", "키드"
+        };
+
+        List<UnitData> allUnits = new List<UnitData>();
+        List<UnitData> commonPool = new List<UnitData>();
+
+        for (int i = 0; i < commonNames.Length; i++)
+        {
+            UnitData data = ScriptableObject.CreateInstance<UnitData>();
+            data.unitID = i + 1;
+            data.unitName = commonNames[i];
+            data.displayName = commonNames[i];
+            data.grade = UnitGrade.Common;
+            data.attackDamage = 8f + i * 0.5f;
+            data.attackSpeed = 1f;
+            data.attackRange = 3f;
+            data.combineCount = 3;
+            allUnits.Add(data);
+            commonPool.Add(data);
+        }
+
+        unitDatabase.allUnits = allUnits.ToArray();
+        unitDatabase.commonPool = commonPool.ToArray();
+
+        Debug.Log($"[SummonManager] UnitDatabase 자동 구성 완료: {allUnits.Count}개 유닛 등록");
+    }
 }

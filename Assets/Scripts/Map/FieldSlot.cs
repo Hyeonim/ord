@@ -1,22 +1,24 @@
 using UnityEngine;
 
 /// <summary>
-/// 필드의 개별 배치 슬롯을 나타낸다.
-/// 유닛이 이 슬롯 위에 배치될 수 있다.
+/// 유닛을 배치할 수 있는 필드 슬롯.
+/// 터치/클릭으로 유닛을 배치하거나 교환한다.
 /// </summary>
 public class FieldSlot : MonoBehaviour
 {
-    [Header("상태")]
+    [Header("설정")]
+    public int slotIndex;
     public bool isOccupied = false;
-    public UnitController occupiedUnit;
 
-    [Header("시각 설정")]
-    public Color emptyColor = new Color(0.3f, 0.8f, 0.3f, 0.5f);
-    public Color occupiedColor = new Color(0.8f, 0.3f, 0.3f, 0.5f);
-    public Color highlightColor = new Color(1f, 1f, 0.3f, 0.7f);
+    [Header("배치된 유닛")]
+    public UnitController placedUnit;
+
+    [Header("시각")]
+    [SerializeField] private Color normalColor = new Color(0.3f, 0.8f, 0.3f, 0.5f);
+    [SerializeField] private Color highlightColor = new Color(1f, 1f, 0f, 0.7f);
+    [SerializeField] private Color occupiedColor = new Color(0.5f, 0.5f, 0.5f, 0.5f);
 
     private Renderer slotRenderer;
-    private bool isHighlighted = false;
 
     private void Awake()
     {
@@ -24,50 +26,58 @@ public class FieldSlot : MonoBehaviour
         UpdateVisual();
     }
 
-    /// <summary>
-    /// 유닛을 이 슬롯에 배치한다.
-    /// </summary>
-    public void PlaceUnit(UnitController unit)
+    public bool PlaceUnit(UnitController unit)
     {
-        occupiedUnit = unit;
+        if (isOccupied) return false;
+
+        placedUnit = unit;
         isOccupied = true;
+        unit.PlaceOnField(transform.position + Vector3.up * 0.5f);
         UpdateVisual();
+        return true;
     }
 
-    /// <summary>
-    /// 슬롯에서 유닛을 제거한다.
-    /// </summary>
-    public void RemoveUnit()
+    public UnitController RemoveUnit()
     {
-        occupiedUnit = null;
+        if (!isOccupied || placedUnit == null) return null;
+
+        UnitController unit = placedUnit;
+        placedUnit = null;
         isOccupied = false;
         UpdateVisual();
+        return unit;
     }
 
-    /// <summary>
-    /// 하이라이트 표시 (드래그 중 호버 시).
-    /// </summary>
-    public void SetHighlight(bool highlight)
+    public void SwapUnit(FieldSlot otherSlot)
     {
-        isHighlighted = highlight;
+        if (otherSlot == null) return;
+
+        UnitController temp = placedUnit;
+        Vector3 tempPos = transform.position + Vector3.up * 0.5f;
+        Vector3 otherPos = otherSlot.transform.position + Vector3.up * 0.5f;
+
+        placedUnit = otherSlot.placedUnit;
+        otherSlot.placedUnit = temp;
+
+        if (placedUnit != null) placedUnit.transform.position = tempPos;
+        if (otherSlot.placedUnit != null) otherSlot.placedUnit.transform.position = otherPos;
+
+        isOccupied = placedUnit != null;
+        otherSlot.isOccupied = otherSlot.placedUnit != null;
+
         UpdateVisual();
+        otherSlot.UpdateVisual();
+    }
+
+    public void Highlight(bool on)
+    {
+        if (slotRenderer == null) return;
+        slotRenderer.material.color = on ? highlightColor : (isOccupied ? occupiedColor : normalColor);
     }
 
     private void UpdateVisual()
     {
         if (slotRenderer == null) return;
-
-        if (isHighlighted)
-            slotRenderer.material.color = highlightColor;
-        else if (isOccupied)
-            slotRenderer.material.color = occupiedColor;
-        else
-            slotRenderer.material.color = emptyColor;
-    }
-
-    private void OnDrawGizmos()
-    {
-        Gizmos.color = isOccupied ? Color.red : Color.green;
-        Gizmos.DrawWireCube(transform.position, new Vector3(1f, 0.1f, 1f));
+        slotRenderer.material.color = isOccupied ? occupiedColor : normalColor;
     }
 }

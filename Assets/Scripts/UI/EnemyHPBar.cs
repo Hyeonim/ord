@@ -1,45 +1,92 @@
 using UnityEngine;
 
 /// <summary>
-/// 적 머리 위에 표시되는 HP 바.
-/// 월드 스페이스 Canvas 또는 간단한 스프라이트로 구현.
+/// 적 머리 위에 표시되는 체력바.
+/// 월드 스페이스에서 빌보드 방식으로 카메라를 향한다.
 /// </summary>
 public class EnemyHPBar : MonoBehaviour
 {
-    [Header("참조")]
-    public Transform fillBar;
-    public EnemyController enemy;
+    [SerializeField] private Transform fillBar;
+    [SerializeField] private float yOffset = 1.2f;
 
-    private Vector3 originalScale;
+    private EnemyController enemy;
     private Camera mainCamera;
+    private Transform barBackground;
 
-    private void Start()
+    public void Initialize(EnemyController enemyController)
     {
-        if (fillBar != null)
-            originalScale = fillBar.localScale;
+        enemy = enemyController;
         mainCamera = Camera.main;
 
-        if (enemy == null)
-            enemy = GetComponentInParent<EnemyController>();
+        // HP바 생성 (간단한 큐브 기반)
+        CreateHPBar();
+
+        if (enemy != null)
+        {
+            enemy.OnHPChanged += UpdateBar;
+        }
     }
 
-    private void Update()
+    private void CreateHPBar()
     {
-        if (enemy == null) return;
+        // 배경 (빨간색)
+        GameObject bg = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        bg.name = "HPBar_BG";
+        bg.transform.SetParent(transform);
+        bg.transform.localPosition = new Vector3(0, yOffset, 0);
+        bg.transform.localScale = new Vector3(1f, 0.1f, 0.1f);
+        Renderer bgRend = bg.GetComponent<Renderer>();
+        if (bgRend != null) bgRend.material.color = Color.red;
+        Destroy(bg.GetComponent<Collider>());
+        barBackground = bg.transform;
 
-        // HP 비율에 따라 바 크기 조절
+        // 전경 (녹색)
+        GameObject fill = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        fill.name = "HPBar_Fill";
+        fill.transform.SetParent(bg.transform);
+        fill.transform.localPosition = Vector3.zero;
+        fill.transform.localScale = Vector3.one;
+        Renderer fillRend = fill.GetComponent<Renderer>();
+        if (fillRend != null) fillRend.material.color = Color.green;
+        Destroy(fill.GetComponent<Collider>());
+        fillBar = fill.transform;
+    }
+
+    private void LateUpdate()
+    {
+        if (enemy == null || enemy.IsDead)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        // 빌보드: 항상 카메라를 향함
+        if (mainCamera != null && barBackground != null)
+        {
+            barBackground.rotation = mainCamera.transform.rotation;
+        }
+    }
+
+    private void UpdateBar(float hpPercent)
+    {
         if (fillBar != null)
         {
-            float ratio = enemy.GetHPRatio();
-            Vector3 scale = originalScale;
-            scale.x = originalScale.x * ratio;
-            fillBar.localScale = scale;
-        }
+            fillBar.localScale = new Vector3(hpPercent, 1f, 1f);
+            fillBar.localPosition = new Vector3((hpPercent - 1f) / 2f, 0, 0);
 
-        // 카메라를 향하도록 회전
-        if (mainCamera != null)
-        {
-            transform.LookAt(transform.position + mainCamera.transform.forward);
+            // 색상 변화
+            Renderer rend = fillBar.GetComponent<Renderer>();
+            if (rend != null)
+            {
+                if (hpPercent > 0.5f) rend.material.color = Color.green;
+                else if (hpPercent > 0.25f) rend.material.color = Color.yellow;
+                else rend.material.color = Color.red;
+            }
         }
+    }
+
+    private void OnDestroy()
+    {
+        if (enemy != null) enemy.OnHPChanged -= UpdateBar;
     }
 }

@@ -1,260 +1,137 @@
 using UnityEngine;
 
 /// <summary>
-/// 유닛의 드래그 앤 드롭 이동을 관리하는 시스템.
-/// - 인벤토리 → 필드 배치
-/// - 필드 → 필드 위치 이동
-/// - 유닛 간 위치 교환(Swap)
-/// - PC(마우스) + 모바일(터치) 동시 지원
+/// 모바일 터치 기반 드래그 앤 드롭 시스템.
+/// 유닛을 인벤토리에서 필드로 배치하거나, 필드 내 위치를 교환한다.
 /// </summary>
 public class DragDropManager : MonoBehaviour
 {
     public static DragDropManager Instance { get; private set; }
 
     [Header("설정")]
-    public LayerMask fieldLayer;        // 필드 영역 레이어
-    public LayerMask unitLayer;         // 유닛 레이어
-    public LayerMask inventoryLayer;    // 인벤토리 영역 레이어
-    public float dragHeight = 1.5f;     // 드래그 중 유닛 높이
+    [SerializeField] private float dragThreshold = 0.3f;
 
-    [Header("상태")]
     private UnitController draggedUnit;
+    private Vector3 originalPosition;
     private bool isDragging = false;
-    private Camera mainCamera;
     private int activeTouchId = -1;
+    private Camera mainCamera;
 
     private void Awake()
     {
         if (Instance == null) Instance = this;
         else Destroy(gameObject);
+    }
+
+    private void Start()
+    {
         mainCamera = Camera.main;
     }
 
     private void Update()
     {
-        // 모바일 터치 우선 처리
+        if (GameManager.Instance != null && GameManager.Instance.IsGameOver) return;
+
         if (Input.touchCount > 0)
-            HandleTouch();
+            HandleTouchInput();
         else
-            HandleMouse();
+            HandleMouseInput();
     }
 
-    private void HandleMouse()
+    private void HandleTouchInput()
     {
-        if (Input.GetMouseButtonDown(0))
-            TryPickUp(Input.mousePosition);
-        else if (Input.GetMouseButton(0) && isDragging)
-            DragUnit(Input.mousePosition);
-        else if (Input.GetMouseButtonUp(0) && isDragging)
-            DropUnit(Input.mousePosition);
-    }
-
-    private void HandleTouch()
-    {
-        foreach (Touch touch in Input.touches)
+        Touch touch = Input.GetTouch(0);
+        switch (touch.phase)
         {
-            switch (touch.phase)
-            {
-                case TouchPhase.Began:
-                    if (!isDragging)
-                    {
-                        TryPickUp(touch.position);
-                        if (isDragging) activeTouchId = touch.fingerId;
-                    }
-                    break;
-                case TouchPhase.Moved:
-                case TouchPhase.Stationary:
-                    if (isDragging && touch.fingerId == activeTouchId)
-                        DragUnit(touch.position);
-                    break;
-                case TouchPhase.Ended:
-                case TouchPhase.Canceled:
-                    if (isDragging && touch.fingerId == activeTouchId)
-                    {
-                        DropUnit(touch.position);
-                        activeTouchId = -1;
-                    }
-                    break;
-            }
+            case TouchPhase.Began:
+                if (!isDragging) { activeTouchId = touch.fingerId; TryStartDrag(touch.position); }
+                break;
+            case TouchPhase.Moved:
+            case TouchPhase.Stationary:
+                if (isDragging && touch.fingerId == activeTouchId) UpdateDrag(touch.position);
+                break;
+            case TouchPhase.Ended:
+            case TouchPhase.Canceled:
+                if (isDragging && touch.fingerId == activeTouchId) { EndDrag(touch.position); activeTouchId = -1; }
+                break;
         }
     }
 
-    private void TryPickUp(Vector2 screenPos)
+    private void HandleMouseInput()
     {
-        Ray ray = mainCamera.ScreenPointToRay(screenPos);
-        RaycastHit hit;
+        if (Input.GetMouseButtonDown(0)) TryStartDrag(Input.mousePosition);
+        else if (Input.GetMouseButton(0) && isDragging) UpdateDrag(Input.mousePosition);
+        else if (Input.GetMouseButtonUp(0) && isDragging) EndDrag(Input.mousePosition);
+    }
 
-        if (Physics.Raycast(ray, out hit, 100f, unitLayer))
+    private void TryStartDrag(Vector2 screenPos)
+    {
+        if (mainCamera == null) mainCamera = Camera.main;
+        if (mainCamera == null) return;
+
+        Ray ray = mainCamera.ScreenPointToRay(screenPos);
+        if (Physics.Raycast(ray, out RaycastHit hit, 100f))
         {
             UnitController unit = hit.collider.GetComponent<UnitController>();
-            if (unit == null) unit = hit.collider.GetComponentInParent<UnitController>();
-
             if (unit != null)
             {
                 draggedUnit = unit;
-                draggedUnit.isDragging = true;
-                draggedUnit.originalPosition = draggedUnit.transform.position;
+                originalPosition = unit.transform.position;
                 isDragging = true;
-
-                Vector3 pos = draggedUnit.transform.position;
-                pos.y = dragHeight;
-                draggedUnit.transform.position = pos;
-
-                Debug.Log($"[DragDrop] {unit.UnitData.unitName} 집어올림");
+                draggedUnit.transform.position += Vector3.up * 0.5f;
             }
         }
     }
 
-    private void DragUnit(Vector2 screenPos)
+    private void UpdateDrag(Vector2 screenPos)
     {
-        if (draggedUnit == null) return;
-
+        if (draggedUnit == null || mainCamera == null) return;
         Ray ray = mainCamera.ScreenPointToRay(screenPos);
-        Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
-
+        Plane groundPlane = new Plane(Vector3.up, Vector3.up * 0.5f);
         if (groundPlane.Raycast(ray, out float distance))
         {
             Vector3 worldPos = ray.GetPoint(distance);
-            worldPos.y = dragHeight;
-            draggedUnit.transform.position = worldPos;
+            draggedUnit.transform.position = worldPos + Vector3.up * 0.3f;
         }
     }
 
-    private void DropUnit(Vector2 screenPos)
+    private void EndDrag(Vector2 screenPos)
     {
-        if (draggedUnit == null) return;
+        if (draggedUnit == null) { isDragging = false; return; }
+        if (mainCamera == null) mainCamera = Camera.main;
 
         Ray ray = mainCamera.ScreenPointToRay(screenPos);
-        RaycastHit hit;
+        bool placed = false;
 
-        // 1. 다른 유닛 위에 놓았는지 체크 (Swap)
-        if (Physics.Raycast(ray, out hit, 100f, unitLayer))
+        if (Physics.Raycast(ray, out RaycastHit hit, 100f))
         {
-            UnitController otherUnit = hit.collider.GetComponent<UnitController>();
-            if (otherUnit == null) otherUnit = hit.collider.GetComponentInParent<UnitController>();
-
-            if (otherUnit != null && otherUnit != draggedUnit)
+            FieldSlot slot = hit.collider.GetComponent<FieldSlot>();
+            if (slot != null)
             {
-                SwapUnits(draggedUnit, otherUnit);
-                FinishDrag();
-                return;
+                if (!slot.isOccupied)
+                {
+                    slot.PlaceUnit(draggedUnit);
+                    placed = true;
+                }
+                else if (slot.placedUnit != null && slot.placedUnit != draggedUnit)
+                {
+                    SwapUnits(draggedUnit, slot);
+                    placed = true;
+                }
             }
         }
 
-        // 2. 필드 위에 놓았는지 체크
-        if (Physics.Raycast(ray, out hit, 100f, fieldLayer))
-        {
-            PlaceOnField(hit.point);
-            FinishDrag();
-            return;
-        }
-
-        // 3. 그 외 → 원래 위치로 복귀
-        ReturnToOriginal();
-        FinishDrag();
-    }
-
-    /// <summary>
-    /// 두 유닛의 위치를 교환한다.
-    /// </summary>
-    private void SwapUnits(UnitController unitA, UnitController unitB)
-    {
-        Vector3 posA = unitA.originalPosition;
-        Vector3 posB = unitB.transform.position;
-
-        unitA.transform.position = new Vector3(posB.x, 0f, posB.z);
-        unitB.transform.position = new Vector3(posA.x, 0f, posA.z);
-
-        // 배치 상태도 교환
-        UnitPlacement placementA = unitA.Placement;
-        UnitPlacement placementB = unitB.Placement;
-        unitA.SetPlacement(placementB);
-        unitB.SetPlacement(placementA);
-
-        // 인벤토리 목록 업데이트
-        if (SummonManager.Instance != null)
-        {
-            if (placementA == UnitPlacement.Inventory && placementB == UnitPlacement.Field)
-            {
-                SummonManager.Instance.RemoveFromInventory(unitA);
-                SummonManager.Instance.ReturnToInventory(unitB);
-            }
-            else if (placementA == UnitPlacement.Field && placementB == UnitPlacement.Inventory)
-            {
-                SummonManager.Instance.RemoveFromInventory(unitB);
-                SummonManager.Instance.ReturnToInventory(unitA);
-            }
-        }
-
-        // 스토리 보스 근처 배치 체크
-        CheckStoryBossProximity(unitA);
-        CheckStoryBossProximity(unitB);
-
-        Debug.Log($"[DragDrop] {unitA.UnitData.unitName} ↔ {unitB.UnitData.unitName} 위치 교환!");
-    }
-
-    /// <summary>
-    /// 유닛을 필드에 배치한다.
-    /// </summary>
-    private void PlaceOnField(Vector3 position)
-    {
-        position.y = 0f;
-        draggedUnit.transform.position = position;
-
-        if (draggedUnit.Placement == UnitPlacement.Inventory)
-        {
-            if (SummonManager.Instance != null)
-                SummonManager.Instance.RemoveFromInventory(draggedUnit);
-            draggedUnit.SetPlacement(UnitPlacement.Field);
-            Debug.Log($"[DragDrop] {draggedUnit.UnitData.unitName} 필드에 배치!");
-        }
-
-        // 스토리 보스 근처 배치 체크
-        CheckStoryBossProximity(draggedUnit);
-    }
-
-    /// <summary>
-    /// 유닛을 원래 위치로 되돌린다.
-    /// </summary>
-    private void ReturnToOriginal()
-    {
-        draggedUnit.transform.position = draggedUnit.originalPosition;
-        Debug.Log($"[DragDrop] {draggedUnit.UnitData.unitName} 원래 위치로 복귀");
-    }
-
-    /// <summary>
-    /// 드래그 종료 처리.
-    /// </summary>
-    private void FinishDrag()
-    {
-        if (draggedUnit != null)
-        {
-            draggedUnit.isDragging = false;
-        }
+        if (!placed) draggedUnit.transform.position = originalPosition;
         draggedUnit = null;
         isDragging = false;
     }
 
-    /// <summary>
-    /// 유닛이 스토리 보스 근처에 배치되었는지 체크한다.
-    /// </summary>
-    private void CheckStoryBossProximity(UnitController unit)
+    private void SwapUnits(UnitController unit, FieldSlot targetSlot)
     {
-        if (unit.Placement != UnitPlacement.Field) return;
-
-        StoryBoss boss = FindObjectOfType<StoryBoss>();
-        if (boss != null && boss.IsAlive)
-        {
-            float dist = Vector3.Distance(unit.transform.position, boss.transform.position);
-            if (dist <= unit.UnitData.attackRange)
-            {
-                unit.SetStoryBossTarget(boss);
-                Debug.Log($"[DragDrop] {unit.UnitData.unitName}이(가) 스토리 보스를 타겟으로 설정!");
-            }
-            else
-            {
-                unit.SetStoryBossTarget(null);
-            }
-        }
+        UnitController existingUnit = targetSlot.placedUnit;
+        Vector3 existingPos = existingUnit.transform.position;
+        targetSlot.placedUnit = unit;
+        unit.transform.position = existingPos;
+        existingUnit.transform.position = originalPosition;
     }
 }
